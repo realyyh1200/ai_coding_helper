@@ -102,7 +102,8 @@ async function handleRegister() {
 
   try {
     await authStore.register(username.value, email.value, password.value, fullName.value || null)
-    router.push('/chat')
+    localStorage.removeItem('projectFolder')
+    router.push('/project')
   } catch (err) {
     error.value = err.response?.data?.detail || '注册失败，请稍后重试'
   } finally {

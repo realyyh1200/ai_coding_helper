@@ -8,7 +8,7 @@ import Chat from './views/Chat.vue'
 import { useAuthStore } from './store/auth'
 
 const routes = [
-  { path: '/', redirect: '/chat' },
+  { path: '/', redirect: '/login' },
   { path: '/login', component: Login },
   { path: '/register', component: Register },
   { path: '/chat', component: Chat, meta: { requiresAuth: true } },
@@ -25,9 +25,11 @@ app.use(pinia)
 
 router.beforeEach((to, from, next) => {
   const authStore = useAuthStore()
-  if (to.meta.requiresAuth && !authStore.isAuthenticated) {
+  const hasToken = !!localStorage.getItem('access_token')
+
+  if (to.meta.requiresAuth && !hasToken) {
     next('/login')
-  } else if ((to.path === '/login' || to.path === '/register') && authStore.isAuthenticated) {
+  } else if ((to.path === '/login' || to.path === '/register') && hasToken) {
     next('/chat')
   } else {
     next()
