@@ -1,7 +1,7 @@
 <template>
   <div class="register-container">
     <div class="register-box">
-      <h1>AI编程助手</h1>
+      <h1>AI文件处理助手</h1>
       <h2>注册</h2>
 
       <form @submit.prevent="handleRegister">

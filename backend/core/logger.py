@@ -13,7 +13,7 @@ def setup_logger():
     )
 
     # 创建logger
-    logger = logging.getLogger('ai_coding')
+    logger = logging.getLogger('ai_file_processing')
     logger.setLevel(logging.DEBUG)
     logger.propagate = False
 

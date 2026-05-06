@@ -7,7 +7,7 @@ load_dotenv()
 
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "AI Coding Website"
+    PROJECT_NAME: str = "AI File Processing Website"
     VERSION: str = "1.0.0"
     API_PREFIX: str = "/api"
 
@@ -21,9 +21,14 @@ class Settings(BaseSettings):
 
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:5173"]
 
-    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./ai_coding.db")
+    DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///./ai_file_processing.db")
 
     ANTHROPIC_API_BASE: str = os.getenv("ANTHROPIC_API_BASE", "https://api.anthropic.com/v1")
+
+    QDRANT_HOST: str = os.getenv("QDRANT_HOST", "localhost")
+    QDRANT_PORT: int = int(os.getenv("QDRANT_PORT", "6333"))
+    QDRANT_COLLECTION: str = os.getenv("QDRANT_COLLECTION", "user_memories")
+    QDRANT_VECTOR_SIZE: int = int(os.getenv("QDRANT_VECTOR_SIZE", "1536"))
 
     class Config:
         env_file = ".env"

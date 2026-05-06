@@ -210,7 +210,7 @@ async function handleSend() {
     await streamChat(
       message,
       conversationId,
-      '你是一个专业的AI编程助手，帮助用户解决编程问题。',
+      '你是一个专业的AI文件处理助手，帮助用户解决文件处理问题。',
       (chunk) => {
         loadingContent.value += chunk
       },

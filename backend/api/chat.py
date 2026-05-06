@@ -7,6 +7,7 @@ from models.user import User, Conversation, Message
 from schemas.schema import ChatRequest, ConversationCreate, ConversationResponse, ConversationUpdate
 from core.security import get_current_active_user
 from services.anthropic_service import AnthropicService
+from services.memory_service import MemoryService
 from core.logger import logger
 import json
 
@@ -21,10 +22,12 @@ async def chat_stream(
 ):
     try:
         logger.info(f"💬 用户 {current_user.username} 发起聊天请求 (会话ID: {chat_data.conversation_id})")
-        
+
         if not chat_data.message.strip():
             logger.warning(f"❌ 空消息 - 用户: {current_user.username}")
             raise HTTPException(status_code=400, detail="消息不能为空")
+
+        memory_service = MemoryService(db, current_user.id, chat_data.conversation_id)
 
         conversation = None
         if chat_data.conversation_id:
@@ -62,6 +65,9 @@ async def chat_stream(
         for msg in messages:
             messages_history.append({"role": msg.role, "content": msg.content})
 
+        memory_context = memory_service.get_context_for_ai(include_recent=5)
+        enhanced_system_prompt = f"{chat_data.system_prompt}\n\n{memory_context}"
+
         async def stream_response() -> AsyncGenerator[str, None]:
             anthroic_service = AnthropicService()
 
@@ -70,7 +76,7 @@ async def chat_stream(
                 logger.info(f"🤖 开始AI响应生成 - 会话ID: {conversation.id}")
                 async for chunk in anthroic_service.stream_chat(
                     messages=messages_history,
-                    system_prompt=chat_data.system_prompt
+                    system_prompt=enhanced_system_prompt
                 ):
                     full_response += chunk
                     yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
@@ -83,6 +89,9 @@ async def chat_stream(
                 db.add(assistant_message)
                 conversation.updated_at = conversation.updated_at
                 db.commit()
+
+                memory_service.add_message("user", chat_data.message)
+                memory_service.add_message("assistant", full_response)
 
                 logger.info(f"✅ AI响应完成 - 会话ID: {conversation.id}, 响应长度: {len(full_response)}")
                 yield f"data: {json.dumps({'content': '', 'done': True, 'conversation_id': conversation.id})}\n\n"
@@ -226,6 +235,9 @@ async def delete_conversation(
         if not conversation:
             logger.warning(f"❌ 会话不存在 - ID: {conversation_id}")
             raise HTTPException(status_code=404, detail="对话不存在")
+
+        memory_service = MemoryService(db, current_user.id, conversation_id)
+        memory_service.clear_conversation_memory()
 
         db.delete(conversation)
         db.commit()

@@ -3,7 +3,7 @@
     <div class="container">
       <div class="header">
         <h1>选择项目目录</h1>
-        <p>请选择您的项目所在文件夹，以便AI助手更好地理解您的代码结构</p>
+        <p>请选择您的项目所在文件夹，以便AI助手更好地理解您的文件结构</p>
       </div>
 
       <div class="folder-display">

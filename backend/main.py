@@ -20,8 +20,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="AI Coding Website API",
-    description="AI编程网站后端API",
+    title="AI File Processing Website API",
+    description="AI文件处理网站后端API",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -63,7 +63,7 @@ app.include_router(user.router, prefix="/api/users", tags=["用户"])
 
 @app.get("/")
 async def root():
-    return {"message": "AI Coding Website API", "version": "1.0.0"}
+    return {"message": "AI File Processing Website API", "version": "1.0.0"}
 
 
 @app.get("/health")

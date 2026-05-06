@@ -13,7 +13,7 @@ class AnthropicService:
     async def stream_chat(
         self,
         messages: List[Dict[str, str]],
-        system_prompt: str = "你是一个专业的AI编程助手，帮助用户解决编程问题。"
+        system_prompt: str = "你是一个专业的AI文件助手，帮助用户解决文件处理问题。"
     ) -> AsyncGenerator[str, None]:
         logger.debug(f"📤 发送到AI的消息数量: {len(messages)}")
         try:
@@ -33,7 +33,7 @@ class AnthropicService:
     def chat_sync(
         self,
         messages: List[Dict[str, str]],
-        system_prompt: str = "你是一个专业的AI编程助手，帮助用户解决编程问题。"
+        system_prompt: str = "你是一个专业的AI文件助手，帮助用户解决文件处理问题。"
     ) -> str:
         logger.debug(f"📤 发送同步请求到AI, 消息数量: {len(messages)}")
         try:

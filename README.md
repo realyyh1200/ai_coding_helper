@@ -1,11 +1,11 @@
-# AI编程助手
+# AI文件处理助手
 
-基于FastAPI后端和Vue3前端的AI编程网站，支持流式输出、多用户认证和持久化存储。
+基于FastAPI后端和Vue3前端的AI文件网站，支持流式输出、多用户认证和持久化存储。
 
 ## 项目结构
 
 ```
-ai_coding_website/
+ai_file_processing_website/
 ├── backend/
 │   ├── api/              # API路由
 │   │   ├── auth.py       # 认证相关API
@@ -50,7 +50,7 @@ ai_coding_website/
 ### 使用 uv（推荐）
 
 ```bash
-cd ai_coding_website/backend
+cd ai_file_processing_website/backend
 
 # 安装依赖
 uv sync
@@ -66,7 +66,7 @@ uv run uvicorn main:app --reload --port 8000
 ### 使用 pip（传统方式）
 
 ```bash
-cd ai_coding_website/backend
+cd ai_file_processing_website/backend
 
 # 安装依赖
 pip install -r requirements.txt
@@ -94,7 +94,7 @@ API文档地址: http://localhost:8000/docs
 ## 前端启动
 
 ```bash
-cd ai_coding_website/frontend
+cd ai_file_processing_website/frontend
 
 # 安装依赖
 npm install
