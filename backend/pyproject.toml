@@ -17,6 +17,7 @@ dependencies = [
     "email-validator>=2.3.0",
     "pymysql>=1.1.2",
     "qdrant-client>=1.7.0",
+    "jieba>=0.42.1",
 ]
 
 [build-system]

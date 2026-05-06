@@ -24,10 +24,29 @@ class BM25Retrieval:
         self.idf: Dict[str, float] = {}
         self.doc_count_per_term: Dict[str, int] = {}
         self.doc_ids: List[int] = []
+        self._jieba_available = False
+        self._init_jieba()
+
+    def _init_jieba(self) -> None:
+        """尝试初始化 jieba 分词器"""
+        try:
+            import jieba
+            self._jieba = jieba
+            self._jieba_available = True
+            logger.info("✅ jieba 分词器已加载")
+        except ImportError:
+            self._jieba_available = False
+            logger.warning("⚠️ jieba 未安装，将使用字符级分词处理中文")
+
+    def _contains_chinese(self, text: str) -> bool:
+        """检测文本是否包含中文"""
+        for char in text:
+            if '\u4e00' <= char <= '\u9fff':
+                return True
+        return False
 
     def tokenize(self, text: str) -> List[str]:
         text = text.lower()
-        tokens = re.findall(r'\b\w+\b', text)
         stop_words = {
             'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
             'of', 'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'be',
@@ -39,6 +58,18 @@ class BM25Retrieval:
             '也', '很', '到', '说', '要', '去', '会', '着', '没有', '看',
             '好', '自己', '这', '那', '么', '什么', '怎么', '为什么'
         }
+
+        if self._contains_chinese(text):
+            # 中文文本使用 jieba 分词
+            if self._jieba_available:
+                tokens = self._jieba.lcut(text)
+            else:
+                # 降级为字符级分词
+                tokens = list(text)
+        else:
+            # 纯英文文本使用正则分词
+            tokens = re.findall(r'\b\w+\b', text)
+
         return [t for t in tokens if t not in stop_words and len(t) > 1]
 
     def add_document(self, doc_id: int, doc_text: str) -> None:
