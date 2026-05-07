@@ -48,6 +48,9 @@ async def update_current_user(
         if update_data.password:
             current_user.hashed_password = get_password_hash(update_data.password)
 
+        if update_data.project_folder is not None:
+            current_user.project_folder = update_data.project_folder
+
         db.commit()
         db.refresh(current_user)
         logger.info(f"✅ 用户信息更新成功: {current_user.username}")

@@ -16,6 +16,7 @@ class User(Base):
     is_superuser = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    project_folder = Column(String(500))  # 用户选择的项目目录路径
 
     conversations = relationship("Conversation", back_populates="user", cascade="all, delete-orphan", foreign_keys="Conversation.user_id")
 

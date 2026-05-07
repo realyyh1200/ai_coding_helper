@@ -17,6 +17,7 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     full_name: Optional[str] = None
     password: Optional[str] = Field(None, min_length=6)
+    project_folder: Optional[str] = None
 
 
 class UserResponse(UserBase):
@@ -88,3 +89,21 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     conversation_id: Optional[int] = None
     system_prompt: Optional[str] = "你是一个专业的AI文件助手，帮助用户解决文件处理问题。"
+
+
+# 工具调用相关 Schema
+class SafePathCheckRequest(BaseModel):
+    """检查路径是否为安全路径的请求"""
+    path: str = Field(..., description="需要检查的路径")
+
+
+class SafePathCheckResponse(BaseModel):
+    """检查路径是否为安全路径的响应"""
+    is_safe: bool = Field(..., description="路径是否安全")
+    message: str = Field(..., description="检查结果说明")
+
+
+class ToolCallRequest(BaseModel):
+    """工具调用请求"""
+    tool_name: str = Field(..., description="工具名称")
+    tool_args: dict = Field(..., description="工具参数")

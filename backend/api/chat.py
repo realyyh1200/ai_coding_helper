@@ -1,17 +1,38 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import AsyncGenerator
+from typing import AsyncGenerator, List, Dict, Any
 from db.database import get_db
 from models.user import User, Conversation, Message
 from schemas.schema import ChatRequest, ConversationCreate, ConversationResponse, ConversationUpdate
 from core.security import get_current_active_user
 from services.anthropic_service import AnthropicService
 from services.memory_service import MemoryService
+from services.tool_service import ToolService, TOOLS_DEFINITION
 from core.logger import logger
 import json
 
 router = APIRouter()
+
+
+def build_tool_system_prompt(tools: List[Dict[str, Any]]) -> str:
+    """构建包含工具定义的系统提示词"""
+    tools_json = json.dumps(tools, ensure_ascii=False, indent=2)
+    return f"""你是一个专业的AI文件助手，帮助用户解决文件处理问题。
+
+你可以调用以下工具来完成任务：
+{tools_json}
+
+## 工具调用规则：
+1. 仔细分析用户的问题，判断是否需要调用工具
+2. 如果需要调用工具，使用工具调用格式
+3. 如果不需要调用工具，直接回答用户的问题
+4. 调用工具后，根据工具返回的结果进行总结回答
+
+## 安全注意事项：
+- 所有文件操作必须在用户指定的项目目录内进行
+- 在执行任何文件操作前，必须先使用 check_safe_path 工具验证路径安全性
+"""
 
 
 @router.post("/stream")
@@ -28,6 +49,7 @@ async def chat_stream(
             raise HTTPException(status_code=400, detail="消息不能为空")
 
         memory_service = MemoryService(db, current_user.id, chat_data.conversation_id)
+        tool_service = ToolService(db, current_user.id)
 
         conversation = None
         if chat_data.conversation_id:
@@ -66,17 +88,54 @@ async def chat_stream(
             messages_history.append({"role": msg.role, "content": msg.content})
 
         memory_context = memory_service.get_context_for_ai(include_recent=5)
-        enhanced_system_prompt = f"{chat_data.system_prompt}\n\n{memory_context}"
+        tool_system_prompt = build_tool_system_prompt(TOOLS_DEFINITION)
+        enhanced_system_prompt = f"{chat_data.system_prompt}\n\n{memory_context}\n\n{tool_system_prompt}"
 
         async def stream_response() -> AsyncGenerator[str, None]:
-            anthroic_service = AnthropicService()
+            anthropic_service = AnthropicService()
 
             full_response = ""
             try:
                 logger.info(f"🤖 开始AI响应生成 - 会话ID: {conversation.id}")
-                async for chunk in anthroic_service.stream_chat(
+                
+                # 第一步：让AI分析是否需要调用工具
+                ai_result = anthropic_service.chat_with_tools(
                     messages=messages_history,
-                    system_prompt=enhanced_system_prompt
+                    system_prompt=enhanced_system_prompt,
+                    tools=TOOLS_DEFINITION
+                )
+                
+                # 如果有工具调用请求
+                if ai_result["tool_calls"]:
+                    logger.info(f"🔧 AI请求调用工具 - 数量: {len(ai_result['tool_calls'])}")
+                    
+                    # 执行工具调用
+                    for tool_call in ai_result["tool_calls"]:
+                        tool_name = tool_call["name"]
+                        tool_args = tool_call["args"]
+                        logger.info(f"🔧 执行工具调用: {tool_name}({tool_args})")
+                        
+                        # 调用工具
+                        tool_result = tool_service.call_tool(tool_name, tool_args)
+                        
+                        # 将工具调用结果转换为消息格式
+                        if hasattr(tool_result, "dict"):
+                            tool_result = tool_result.dict()
+                        
+                        tool_result_str = json.dumps(tool_result, ensure_ascii=False)
+                        messages_history.append({
+                            "role": "assistant",
+                            "content": f"<function_calls>\n<invoke name=\"{tool_name}\">\n{json.dumps(tool_args, ensure_ascii=False, indent=2)}\n</invoke>\n</function_calls>"
+                        })
+                        messages_history.append({
+                            "role": "user",
+                            "content": f"<function_result name=\"{tool_name}\">\n{tool_result_str}\n</function_result>"
+                        })
+                
+                # 第二步：生成最终响应（流式）
+                async for chunk in anthropic_service.stream_chat(
+                    messages=messages_history,
+                    system_prompt=chat_data.system_prompt + "\n\n" + memory_context
                 ):
                     full_response += chunk
                     yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
