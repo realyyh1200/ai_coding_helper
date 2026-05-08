@@ -205,12 +205,14 @@ async function handleSend() {
   loadingContent.value = ''
 
   let conversationId = currentConversation.value?.id
+  const filePath = selectedFolder.value?.name || null
 
   try {
     await streamChat(
       message,
       conversationId,
       '你是一个专业的AI文件处理助手，帮助用户解决文件处理问题。',
+      filePath,
       (chunk) => {
         loadingContent.value += chunk
       },

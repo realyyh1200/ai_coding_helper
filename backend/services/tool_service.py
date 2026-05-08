@@ -65,6 +65,29 @@ class ToolService:
                 message=f"路径检查失败：{str(e)}"
             )
 
+    def get_current_file(self, file_path: str = None) -> Dict[str, Any]:
+        """
+        获取用户当前选中的目录路径（由前端传入）
+        
+        Args:
+            file_path: 前端传递的目录路径
+            
+        Returns:
+            Dict: 包含路径信息的字典
+        """
+        if not file_path:
+            return {
+                "success": False,
+                "message": "您当前没有选中任何目录",
+                "path": None
+            }
+        
+        return {
+            "success": True,
+            "message": f"您当前选中的目录是：{file_path}",
+            "path": file_path
+        }
+
     def call_tool(self, tool_name: str, tool_args: Dict[str, Any]) -> Any:
         """
         根据工具名称调用相应的工具
@@ -78,6 +101,7 @@ class ToolService:
         """
         tools = {
             "check_safe_path": self.check_safe_path,
+            "get_current_file": self.get_current_file,
         }
         
         if tool_name not in tools:
@@ -103,6 +127,20 @@ TOOLS_DEFINITION = [
                 }
             },
             "required": ["path"]
+        }
+    },
+    {
+        "name": "get_current_file",
+        "description": "获取用户当前选中的目录路径。当用户询问'我选中了哪个目录'、'当前目录是什么'或类似问题时调用此工具。需要前端传入用户选中的目录路径。",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "file_path": {
+                    "type": "string",
+                    "description": "用户当前选中的目录路径"
+                }
+            },
+            "required": ["file_path"]
         }
     }
 ]

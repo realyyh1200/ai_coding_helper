@@ -40,7 +40,7 @@ export async function deleteConversation(conversationId) {
   await axios.delete(`${API_BASE_URL}/chat/conversations/${conversationId}`, { headers })
 }
 
-export async function streamChat(message, conversationId, systemPrompt, onChunk, onDone, onError) {
+export async function streamChat(message, conversationId, systemPrompt, filePath, onChunk, onDone, onError) {
   const headers = await getAuthHeaders()
 
   const response = await fetch(`${API_BASE_URL}/chat/stream`, {
@@ -49,7 +49,8 @@ export async function streamChat(message, conversationId, systemPrompt, onChunk,
     body: JSON.stringify({
       message,
       conversation_id: conversationId,
-      system_prompt: systemPrompt
+      system_prompt: systemPrompt,
+      file_path: filePath
     })
   })
 

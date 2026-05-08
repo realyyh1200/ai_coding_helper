@@ -1,5 +1,5 @@
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, Range, SearchRequest
+from qdrant_client.models import Distance, VectorParams, PointStruct, Filter, FieldCondition, MatchValue, Range
 from qdrant_client.http.exceptions import UnexpectedResponse
 from core.config import settings
 from core.logger import logger
@@ -65,7 +65,7 @@ class QdrantService:
             logger.warning("Qdrant not connected, skipping upsert")
             return None
         try:
-            point_id = f"{user_id}_{memory_id}_{uuid.uuid4().hex[:8]}"
+            point_id = memory_id
             self._client.upsert(
                 collection_name=settings.QDRANT_COLLECTION,
                 points=[
@@ -99,19 +99,17 @@ class QdrantService:
         try:
             results = self._client.query_points(
                 collection_name=settings.QDRANT_COLLECTION,
-                query=SearchRequest(
-                    vector=query_vector,
-                    filter=Filter(
-                        must=[
-                            FieldCondition(
-                                key="user_id",
-                                match=MatchValue(value=user_id)
-                            )
-                        ]
-                    ),
-                    limit=limit,
-                    score_threshold=score_threshold
-                )
+                query=query_vector,
+                filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="user_id",
+                            match=MatchValue(value=user_id)
+                        )
+                    ]
+                ),
+                limit=limit,
+                score_threshold=score_threshold
             )
             return [
                 {

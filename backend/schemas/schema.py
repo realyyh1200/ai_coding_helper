@@ -17,7 +17,6 @@ class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
     full_name: Optional[str] = None
     password: Optional[str] = Field(None, min_length=6)
-    project_folder: Optional[str] = None
 
 
 class UserResponse(UserBase):
@@ -89,6 +88,7 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1)
     conversation_id: Optional[int] = None
     system_prompt: Optional[str] = "你是一个专业的AI文件助手，帮助用户解决文件处理问题。"
+    file_path: Optional[str] = None  # 用户当前选中的目录路径
 
 
 # 工具调用相关 Schema

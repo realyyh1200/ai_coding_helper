@@ -113,6 +113,11 @@ async def chat_stream(
                     for tool_call in ai_result["tool_calls"]:
                         tool_name = tool_call["name"]
                         tool_args = tool_call["args"]
+                        
+                        # 如果调用 get_current_file 工具且前端传入了 file_path，自动填充参数
+                        if tool_name == "get_current_file" and chat_data.file_path is not None:
+                            tool_args["file_path"] = chat_data.file_path
+                        
                         logger.info(f"🔧 执行工具调用: {tool_name}({tool_args})")
                         
                         # 调用工具
