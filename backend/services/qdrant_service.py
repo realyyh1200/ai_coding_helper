@@ -5,6 +5,25 @@ from core.config import settings
 from core.logger import logger
 from typing import List, Optional, Dict, Any
 import uuid
+import time
+
+
+def retry_with_backoff(max_retries=3, delay=1):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    last_exception = e
+                    logger.warning(f"Qdrant operation failed (attempt {attempt + 1}/{max_retries}): {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(delay * (2 ** attempt))
+            logger.error(f"Qdrant operation failed after {max_retries} attempts: {last_exception}")
+            raise last_exception
+        return wrapper
+    return decorator
 
 
 class QdrantService:
@@ -25,13 +44,20 @@ class QdrantService:
             self._client = QdrantClient(
                 host=settings.QDRANT_HOST,
                 port=settings.QDRANT_PORT,
-                timeout=10
+                timeout=30,
+                check_compatibility=False
             )
             self._ensure_collection()
             logger.info(f"Qdrant connected: {settings.QDRANT_HOST}:{settings.QDRANT_PORT}")
         except Exception as e:
             logger.error(f"Failed to connect to Qdrant: {e}")
             self._client = None
+
+    def _reconnect(self) -> bool:
+        logger.info("Attempting to reconnect to Qdrant...")
+        self._client = None
+        self._connect()
+        return self._client is not None
 
     def _ensure_collection(self) -> None:
         if self._client is None:
@@ -54,6 +80,7 @@ class QdrantService:
     def is_connected(self) -> bool:
         return self._client is not None
 
+    @retry_with_backoff(max_retries=3, delay=1)
     def upsert_vector(
         self,
         user_id: int,
@@ -62,8 +89,10 @@ class QdrantService:
         payload: Dict[str, Any]
     ) -> Optional[str]:
         if self._client is None:
-            logger.warning("Qdrant not connected, skipping upsert")
-            return None
+            logger.warning("Qdrant not connected, attempting reconnect...")
+            if not self._reconnect():
+                logger.warning("Failed to reconnect to Qdrant, skipping upsert")
+                return None
         try:
             point_id = memory_id
             self._client.upsert(
@@ -84,8 +113,14 @@ class QdrantService:
             return point_id
         except Exception as e:
             logger.error(f"Failed to upsert vector: {e}")
+            # 尝试重新连接
+            try:
+                self._reconnect()
+            except Exception:
+                pass
             return None
 
+    @retry_with_backoff(max_retries=3, delay=1)
     def search_vectors(
         self,
         query_vector: List[float],
@@ -94,13 +129,16 @@ class QdrantService:
         score_threshold: float = 0.0
     ) -> List[Dict[str, Any]]:
         if self._client is None:
-            logger.warning("Qdrant not connected, returning empty results")
-            return []
+            logger.warning("Qdrant not connected, attempting reconnect...")
+            if not self._reconnect():
+                logger.warning("Failed to reconnect to Qdrant, returning empty results")
+                return []
         try:
-            results = self._client.query_points(
+            # 使用 search 方法替代 query_points，参数名为 query_filter
+            results = self._client.search(
                 collection_name=settings.QDRANT_COLLECTION,
-                query=query_vector,
-                filter=Filter(
+                query_vector=query_vector,
+                query_filter=Filter(
                     must=[
                         FieldCondition(
                             key="user_id",
@@ -117,10 +155,15 @@ class QdrantService:
                     "score": r.score,
                     "payload": r.payload
                 }
-                for r in results.points
+                for r in results
             ]
         except Exception as e:
             logger.error(f"Failed to search vectors: {e}")
+            # 尝试重新连接
+            try:
+                self._reconnect()
+            except Exception:
+                pass
             return []
 
     def delete_vectors(self, memory_id: int, user_id: int) -> bool:
