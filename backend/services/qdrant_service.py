@@ -134,21 +134,38 @@ class QdrantService:
                 logger.warning("Failed to reconnect to Qdrant, returning empty results")
                 return []
         try:
-            # 使用 search 方法替代 query_points，参数名为 query_filter
-            results = self._client.search(
-                collection_name=settings.QDRANT_COLLECTION,
-                query_vector=query_vector,
-                query_filter=Filter(
-                    must=[
-                        FieldCondition(
-                            key="user_id",
-                            match=MatchValue(value=user_id)
-                        )
-                    ]
-                ),
-                limit=limit,
-                score_threshold=score_threshold
-            )
+            # 兼容新旧版本的 Qdrant API
+            if hasattr(self._client, 'search'):
+                results = self._client.search(
+                    collection_name=settings.QDRANT_COLLECTION,
+                    query_vector=query_vector,
+                    query_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="user_id",
+                                match=MatchValue(value=user_id)
+                            )
+                        ]
+                    ),
+                    limit=limit,
+                    score_threshold=score_threshold
+                )
+            else:
+                # 新版 QdrantClient 使用 query_points
+                results = self._client.query_points(
+                    collection_name=settings.QDRANT_COLLECTION,
+                    query=query_vector,
+                    query_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="user_id",
+                                match=MatchValue(value=user_id)
+                            )
+                        ]
+                    ),
+                    limit=limit,
+                    score_threshold=score_threshold
+                ).points
             return [
                 {
                     "id": r.id,

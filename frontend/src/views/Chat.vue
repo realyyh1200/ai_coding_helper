@@ -29,6 +29,9 @@
             :file="file"
             :expanded-folders="expandedFolders"
             @toggle="toggleFolder"
+            @loaded="onSubFilesLoaded"
+            @dragstart="(e) => onFileDragStart(e, file)"
+            @dragend="onFileDragEnd"
           />
         </div>
         <div v-if="selectedFolder && fileList.length === 0" class="empty-folder">
@@ -90,11 +93,14 @@
         </div>
       </div>
 
-      <div class="input-container">
+      <div class="input-container" :class="{ 'drag-over': isDragOver }" @dragover.prevent="onDragOver" @dragleave="onDragLeave" @drop.prevent="onDrop">
+        <div v-if="isDragOver" class="drop-indicator">
+          📁 释放以生成文件总结
+        </div>
         <textarea
           v-model="inputMessage"
           @keydown.enter.exact="handleSend"
-          placeholder="输入消息... (Enter 发送, Shift+Enter 换行)"
+          placeholder="输入消息... (Enter 发送, Shift+Enter 换行) 或拖放文件到此处生成总结"
           :disabled="isLoading"
         ></textarea>
         <button @click="handleSend" :disabled="isLoading || !inputMessage.trim()">
@@ -128,6 +134,7 @@ const inputMessage = ref('')
 const isLoading = ref(false)
 const loadingContent = ref('')
 const messagesContainer = ref(null)
+const isDragOver = ref(false)
 
 // 文件夹相关状态
 const selectedFolder = ref(null)
@@ -308,19 +315,23 @@ async function selectProjectFolder() {
   }
 }
 
-async function loadFileList(handle = selectedFolder.value?.handle) {
+async function loadFileList(handle = selectedFolder.value?.handle, parentPath = '') {
   if (!handle) return
   
-  fileList.value = []
-  expandedFolders.value = []
+  if (!parentPath) {
+    fileList.value = []
+    expandedFolders.value = []
+  }
   
   try {
     for await (const entry of handle.values()) {
+      const fullPath = parentPath ? `${parentPath}/${entry.name}` : entry.name
       fileList.value.push({
         name: entry.name,
-        path: entry.name,
+        path: fullPath,
         isFolder: entry.kind === 'directory',
-        handle: entry
+        handle: entry,
+        parentPath: parentPath
       })
     }
     fileList.value.sort((a, b) => {
@@ -333,8 +344,42 @@ async function loadFileList(handle = selectedFolder.value?.handle) {
   }
 }
 
+async function loadSubFiles(handle, parentPath = '') {
+  if (!handle) return []
+  
+  const files = []
+  try {
+    for await (const entry of handle.values()) {
+      const fullPath = parentPath ? `${parentPath}/${entry.name}` : entry.name
+      files.push({
+        name: entry.name,
+        path: fullPath,
+        isFolder: entry.kind === 'directory',
+        handle: entry,
+        parentPath: parentPath
+      })
+    }
+    files.sort((a, b) => {
+      if (a.isFolder && !b.isFolder) return -1
+      if (!a.isFolder && b.isFolder) return 1
+      return a.name.localeCompare(b.name)
+    })
+  } catch (error) {
+    console.error('Failed to load subfiles:', error)
+  }
+  return files
+}
+
 function refreshFiles() {
   loadFileList()
+}
+
+function onSubFilesLoaded(subFiles) {
+  for (const file of subFiles) {
+    if (!fileList.value.find(f => f.path === file.path)) {
+      fileList.value.push(file)
+    }
+  }
 }
 
 function clearFolder() {
@@ -350,6 +395,166 @@ function toggleFolder(folderPath) {
     expandedFolders.value.splice(index, 1)
   } else {
     expandedFolders.value.push(folderPath)
+  }
+}
+
+// 文件拖拽相关方法
+function onFileDragStart(e, file) {
+  e.dataTransfer.setData('text/plain', file.path)
+  e.dataTransfer.effectAllowed = 'copy'
+}
+
+function onFileDragEnd(e) {
+}
+
+// 辅助函数：通过相对路径查找文件句柄
+async function findFileHandleByPath(filePath, currentHandle = selectedFolder.value?.handle) {
+  if (!currentHandle) return null
+  
+  const parts = filePath.split('/').filter(Boolean)
+  let currentEntry = currentHandle
+  
+  try {
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i]
+      if (i < parts.length - 1) {
+        currentEntry = await currentEntry.getDirectoryHandle(part)
+      } else {
+        return await currentEntry.getFileHandle(part)
+      }
+    }
+  } catch (error) {
+    console.error('Failed to find file handle:', error)
+    return null
+  }
+  return null
+}
+
+// 辅助函数：估算 token 数量
+function estimateTokenCount(content) {
+  return Math.floor(content.length / 2)
+}
+
+// 拖放相关方法
+function onDragOver(e) {
+  isDragOver.value = true
+}
+
+function onDragLeave(e) {
+  isDragOver.value = false
+}
+
+async function onDrop(e) {
+  isDragOver.value = false
+  
+  let fileInfo = null
+  
+  // 尝试从文件列表拖拽
+  const filePathFromList = e.dataTransfer.getData('text/plain')
+  if (filePathFromList) {
+    try {
+      const fileHandle = await findFileHandleByPath(filePathFromList)
+      if (fileHandle) {
+        const file = await fileHandle.getFile()
+        const content = await file.text()
+        const tokenCount = estimateTokenCount(content)
+        fileInfo = {
+          name: file.name,
+          path: filePathFromList,
+          content: content,
+          tokenCount: tokenCount,
+          size: file.size
+        }
+      }
+    } catch (error) {
+      console.error('Failed to read file from list:', error)
+    }
+  }
+  
+  // 如果没有从文件列表拖拽，尝试从文件系统拖拽
+  if (!fileInfo) {
+    const files = e.dataTransfer.files
+    if (files.length > 0) {
+      try {
+        const file = files[0]
+        const content = await file.text()
+        const tokenCount = estimateTokenCount(content)
+        fileInfo = {
+          name: file.name,
+          path: file.name,
+          content: content,
+          tokenCount: tokenCount,
+          size: file.size
+        }
+      } catch (error) {
+        console.error('Failed to read file from system:', error)
+      }
+    }
+  }
+  
+  if (!fileInfo) {
+    return
+  }
+  
+  currentMessages.value.push({
+    role: 'user',
+    content: `请帮我总结文件: ${fileInfo.name}`
+  })
+  
+  const MAX_TOKEN_COUNT = 100 * 1000
+  if (fileInfo.tokenCount > MAX_TOKEN_COUNT) {
+    currentMessages.value.push({
+      role: 'assistant',
+      content: `文件包含约 ${fileInfo.tokenCount} 个 tokens，超过 ${MAX_TOKEN_COUNT} tokens 的限制，无法生成总结。请考虑分割文件后分别总结。`
+    })
+    return
+  }
+  
+  isLoading.value = true
+  loadingContent.value = ''
+  
+  let conversationId = currentConversation.value?.id
+  
+  try {
+    const enhancedMessage = `请帮我总结文件: ${fileInfo.name}\n\n文件内容:\n${fileInfo.content}`
+    
+    await streamChat(
+      enhancedMessage,
+      conversationId,
+      '你是一个专业的AI文件处理助手，帮助用户解决文件处理问题。用户已经提供了文件内容，请直接基于提供的内容进行总结。',
+      null,
+      (chunk) => {
+        loadingContent.value += chunk
+      },
+      (newConversationId) => {
+        if (newConversationId && !conversationId) {
+          conversationId = newConversationId
+          currentConversation.value.id = newConversationId
+          loadConversations()
+        }
+        currentMessages.value.push({
+          role: 'assistant',
+          content: loadingContent.value
+        })
+        loadingContent.value = ''
+      },
+      (error) => {
+        console.error('Chat error:', error)
+        loadingContent.value = '抱歉，发生了错误。'
+      }
+    )
+  } catch (error) {
+    console.error('Failed to send message:', error)
+    loadingContent.value = '抱歉，发生了错误。'
+  } finally {
+    isLoading.value = false
+    if (loadingContent.value) {
+      currentMessages.value.push({
+        role: 'assistant',
+        content: loadingContent.value
+      })
+      loadingContent.value = ''
+    }
   }
 }
 </script>
@@ -718,6 +923,7 @@ function toggleFolder(folderPath) {
   border-top: 1px solid #bdc3c7;
   display: flex;
   gap: 10px;
+  position: relative;
 }
 
 .input-container textarea {
@@ -752,5 +958,34 @@ function toggleFolder(folderPath) {
 .input-container button:disabled {
   background: #bdc3c7;
   cursor: not-allowed;
+}
+
+.drop-indicator {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: #27ae60;
+  color: white;
+  padding: 20px 40px;
+  border-radius: 10px;
+  font-size: 16px;
+  font-weight: bold;
+  z-index: 10;
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.8;
+  }
+}
+
+.input-container.drag-over {
+  border: 3px dashed #3498db;
+  background: rgba(52, 152, 219, 0.1);
 }
 </style>

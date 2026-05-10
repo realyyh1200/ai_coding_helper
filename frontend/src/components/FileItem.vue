@@ -4,6 +4,9 @@
     <div
       :class="['file-item', { 'is-folder': file.isFolder }]"
       @click="handleClick"
+      :draggable="!file.isFolder"
+      @dragstart="handleDragStart"
+      @dragend="handleDragEnd"
     >
       <span class="file-icon">{{ file.isFolder ? '📂' : '📄' }}</span>
       <span class="file-name">{{ file.name }}</span>
@@ -20,6 +23,7 @@
         :file="subFile"
         :expanded-folders="expandedFolders"
         @toggle="(path) => $emit('toggle', path)"
+        @loaded="(sub) => $emit('loaded', sub)"
       />
     </div>
   </div>
@@ -39,7 +43,7 @@ const props = defineProps({
   }
 })
 
-const emit = defineEmits(['toggle'])
+const emit = defineEmits(['toggle', 'loaded', 'dragstart', 'dragend'])
 
 const subFiles = ref([])
 
@@ -53,11 +57,13 @@ async function loadSubFiles() {
   try {
     const files = []
     for await (const entry of props.file.handle.values()) {
+      const fullPath = `${props.file.path}/${entry.name}`
       files.push({
         name: entry.name,
-        path: `${props.file.path}/${entry.name}`,
+        path: fullPath,
         isFolder: entry.kind === 'directory',
-        handle: entry
+        handle: entry,
+        parentPath: props.file.path
       })
     }
     files.sort((a, b) => {
@@ -66,6 +72,9 @@ async function loadSubFiles() {
       return a.name.localeCompare(b.name)
     })
     subFiles.value = files
+    
+    // 通知父组件，子文件已加载，可以添加到全局列表
+    emit('loaded', files)
   } catch (error) {
     console.error('Failed to load subfiles:', error)
   }
@@ -81,6 +90,18 @@ function handleClick() {
       loadSubFiles()
     }
   }
+}
+
+function handleDragStart(e) {
+  if (props.file.isFolder) return
+  
+  e.dataTransfer.setData('text/plain', props.file.path)
+  e.dataTransfer.effectAllowed = 'copy'
+  emit('dragstart', e)
+}
+
+function handleDragEnd(e) {
+  emit('dragend', e)
 }
 
 // 如果文件夹已展开，初始化时加载子文件

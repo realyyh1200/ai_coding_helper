@@ -51,6 +51,9 @@ async def chat_stream(
         memory_service = MemoryService(db, current_user.id, chat_data.conversation_id)
         tool_service = ToolService(db, current_user.id)
 
+        if chat_data.file_path:
+            tool_service.set_selected_folder(chat_data.file_path)
+
         conversation = None
         if chat_data.conversation_id:
             conversation = db.query(Conversation).filter(
