@@ -1,38 +1,18 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
-from typing import AsyncGenerator, List, Dict, Any
+from typing import AsyncGenerator
 from db.database import get_db
 from models.user import User, Conversation, Message
 from schemas.schema import ChatRequest, ConversationCreate, ConversationResponse, ConversationUpdate
 from core.security import get_current_active_user
 from services.anthropic_service import AnthropicService
 from services.memory_service import MemoryService
-from services.tool_service import ToolService, TOOLS_DEFINITION
+from services.rag_service import RAGService
 from core.logger import logger
 import json
 
 router = APIRouter()
-
-
-def build_tool_system_prompt(tools: List[Dict[str, Any]]) -> str:
-    """构建包含工具定义的系统提示词"""
-    tools_json = json.dumps(tools, ensure_ascii=False, indent=2)
-    return f"""你是一个专业的AI文件助手，帮助用户解决文件处理问题。
-
-你可以调用以下工具来完成任务：
-{tools_json}
-
-## 工具调用规则：
-1. 仔细分析用户的问题，判断是否需要调用工具
-2. 如果需要调用工具，使用工具调用格式
-3. 如果不需要调用工具，直接回答用户的问题
-4. 调用工具后，根据工具返回的结果进行总结回答
-
-## 安全注意事项：
-- 所有文件操作必须在用户指定的项目目录内进行
-- 在执行任何文件操作前，必须先使用 check_safe_path 工具验证路径安全性
-"""
 
 
 @router.post("/stream")
@@ -49,10 +29,7 @@ async def chat_stream(
             raise HTTPException(status_code=400, detail="消息不能为空")
 
         memory_service = MemoryService(db, current_user.id, chat_data.conversation_id)
-        tool_service = ToolService(db, current_user.id)
-
-        if chat_data.file_path:
-            tool_service.set_selected_folder(chat_data.file_path)
+        rag_service = RAGService(db, current_user.id)
 
         conversation = None
         if chat_data.conversation_id:
@@ -91,8 +68,19 @@ async def chat_stream(
             messages_history.append({"role": msg.role, "content": msg.content})
 
         memory_context = memory_service.get_context_for_ai(include_recent=5)
-        tool_system_prompt = build_tool_system_prompt(TOOLS_DEFINITION)
-        enhanced_system_prompt = f"{chat_data.system_prompt}\n\n{memory_context}\n\n{tool_system_prompt}"
+
+        # RAG召回
+        rag_results = rag_service.retrieve(chat_data.message, top_k=5)
+        logger.info(f"🔍 RAG召回结果: {len(rag_results)} 条")
+
+        # 构建RAG上下文
+        rag_context = ""
+        referenced_files = set()
+        if rag_results:
+            rag_context = "【参考文档】\n"
+            for i, result in enumerate(rag_results, 1):
+                rag_context += f"文档{i} ({result['file_name']}):\n{result['content']}\n\n"
+                referenced_files.add(result['file_name'])
 
         async def stream_response() -> AsyncGenerator[str, None]:
             anthropic_service = AnthropicService()
@@ -100,53 +88,25 @@ async def chat_stream(
             full_response = ""
             try:
                 logger.info(f"🤖 开始AI响应生成 - 会话ID: {conversation.id}")
+
+                # 构建增强的系统提示
+                enhanced_system_prompt = chat_data.system_prompt + "\n\n" + memory_context
                 
-                # 第一步：让AI分析是否需要调用工具
-                ai_result = anthropic_service.chat_with_tools(
-                    messages=messages_history,
-                    system_prompt=enhanced_system_prompt,
-                    tools=TOOLS_DEFINITION
-                )
-                
-                # 如果有工具调用请求
-                if ai_result["tool_calls"]:
-                    logger.info(f"🔧 AI请求调用工具 - 数量: {len(ai_result['tool_calls'])}")
-                    
-                    # 执行工具调用
-                    for tool_call in ai_result["tool_calls"]:
-                        tool_name = tool_call["name"]
-                        tool_args = tool_call["args"]
-                        
-                        # 如果调用 get_current_file 工具且前端传入了 file_path，自动填充参数
-                        if tool_name == "get_current_file" and chat_data.file_path is not None:
-                            tool_args["file_path"] = chat_data.file_path
-                        
-                        logger.info(f"🔧 执行工具调用: {tool_name}({tool_args})")
-                        
-                        # 调用工具
-                        tool_result = tool_service.call_tool(tool_name, tool_args)
-                        
-                        # 将工具调用结果转换为消息格式
-                        if hasattr(tool_result, "dict"):
-                            tool_result = tool_result.dict()
-                        
-                        tool_result_str = json.dumps(tool_result, ensure_ascii=False)
-                        messages_history.append({
-                            "role": "assistant",
-                            "content": f"<function_calls>\n<invoke name=\"{tool_name}\">\n{json.dumps(tool_args, ensure_ascii=False, indent=2)}\n</invoke>\n</function_calls>"
-                        })
-                        messages_history.append({
-                            "role": "user",
-                            "content": f"<function_result name=\"{tool_name}\">\n{tool_result_str}\n</function_result>"
-                        })
-                
-                # 第二步：生成最终响应（流式）
+                if rag_results:
+                    enhanced_system_prompt += "\n\n请基于提供的参考文档内容进行回答，回答结束后请列出参考文献名称。"
+
                 async for chunk in anthropic_service.stream_chat(
                     messages=messages_history,
-                    system_prompt=chat_data.system_prompt + "\n\n" + memory_context
+                    system_prompt=enhanced_system_prompt
                 ):
                     full_response += chunk
                     yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
+
+                # 如果有RAG结果，添加参考文献列表
+                if rag_results and referenced_files:
+                    references = "\n\n【参考文献】\n" + "\n".join([f"- {f}" for f in referenced_files])
+                    full_response += references
+                    yield f"data: {json.dumps({'content': references, 'done': False})}\n\n"
 
                 assistant_message = Message(
                     conversation_id=conversation.id,
@@ -198,7 +158,7 @@ async def get_conversations(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ 获取会话列表异常: {str(e)}")
+        logger.error(f"❌ 获取会话列表失败: {str(e)}")
         raise HTTPException(status_code=400, detail=f"获取会话列表失败: {str(e)}")
 
 
@@ -209,84 +169,24 @@ async def create_conversation(
     db: Session = Depends(get_db)
 ):
     try:
-        logger.info(f"➕ 用户 {current_user.username} 创建新会话: {conversation_data.title}")
+        logger.info(f"📝 用户 {current_user.username} 创建新会话")
         conversation = Conversation(
             user_id=current_user.id,
-            title=conversation_data.title
+            title=conversation_data.title or "新对话"
         )
         db.add(conversation)
         db.commit()
         db.refresh(conversation)
-        logger.info(f"✅ 会话创建成功 - ID: {conversation.id}")
+        logger.info(f"✅ 创建会话成功 - ID: {conversation.id}")
         return conversation
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ 创建会话异常: {str(e)}")
-        db.rollback()
+        logger.error(f"❌ 创建会话失败: {str(e)}")
         raise HTTPException(status_code=400, detail=f"创建会话失败: {str(e)}")
 
 
-@router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
-async def get_conversation(
-    conversation_id: int,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    try:
-        logger.info(f"📖 用户 {current_user.username} 获取会话详情 - ID: {conversation_id}")
-        conversation = db.query(Conversation).filter(
-            Conversation.id == conversation_id,
-            Conversation.user_id == current_user.id
-        ).first()
-
-        if not conversation:
-            logger.warning(f"❌ 会话不存在 - ID: {conversation_id}")
-            raise HTTPException(status_code=404, detail="对话不存在")
-
-        logger.info(f"✅ 获取会话详情成功 - ID: {conversation_id}")
-        return conversation
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 获取会话详情异常: {str(e)}")
-        raise HTTPException(status_code=400, detail=f"获取会话详情失败: {str(e)}")
-
-
-@router.patch("/conversations/{conversation_id}", response_model=ConversationResponse)
-async def update_conversation(
-    conversation_id: int,
-    update_data: ConversationUpdate,
-    current_user: User = Depends(get_current_active_user),
-    db: Session = Depends(get_db)
-):
-    try:
-        logger.info(f"✏️ 用户 {current_user.username} 更新会话 - ID: {conversation_id}")
-        conversation = db.query(Conversation).filter(
-            Conversation.id == conversation_id,
-            Conversation.user_id == current_user.id
-        ).first()
-
-        if not conversation:
-            logger.warning(f"❌ 会话不存在 - ID: {conversation_id}")
-            raise HTTPException(status_code=404, detail="对话不存在")
-
-        if update_data.title is not None:
-            conversation.title = update_data.title
-
-        db.commit()
-        db.refresh(conversation)
-        logger.info(f"✅ 会话更新成功 - ID: {conversation_id}, 新标题: {update_data.title}")
-        return conversation
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"❌ 更新会话异常: {str(e)}")
-        db.rollback()
-        raise HTTPException(status_code=400, detail=f"更新会话失败: {str(e)}")
-
-
-@router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/conversations/{conversation_id}")
 async def delete_conversation(
     conversation_id: int,
     current_user: User = Depends(get_current_active_user),
@@ -298,20 +198,50 @@ async def delete_conversation(
             Conversation.id == conversation_id,
             Conversation.user_id == current_user.id
         ).first()
-
+        
         if not conversation:
             logger.warning(f"❌ 会话不存在 - ID: {conversation_id}")
             raise HTTPException(status_code=404, detail="对话不存在")
-
-        memory_service = MemoryService(db, current_user.id, conversation_id)
-        memory_service.clear_conversation_memory()
-
+        
+        db.query(Message).filter(Message.conversation_id == conversation_id).delete()
         db.delete(conversation)
         db.commit()
-        logger.info(f"✅ 会话删除成功 - ID: {conversation_id}")
+        logger.info(f"✅ 删除会话成功 - ID: {conversation_id}")
+        return {"message": "对话已删除"}
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"❌ 删除会话异常: {str(e)}")
-        db.rollback()
+        logger.error(f"❌ 删除会话失败: {str(e)}")
         raise HTTPException(status_code=400, detail=f"删除会话失败: {str(e)}")
+
+
+@router.put("/conversations/{conversation_id}", response_model=ConversationResponse)
+async def update_conversation(
+    conversation_id: int,
+    conversation_data: ConversationUpdate,
+    current_user: User = Depends(get_current_active_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        logger.info(f"📝 用户 {current_user.username} 更新会话 - ID: {conversation_id}")
+        conversation = db.query(Conversation).filter(
+            Conversation.id == conversation_id,
+            Conversation.user_id == current_user.id
+        ).first()
+        
+        if not conversation:
+            logger.warning(f"❌ 会话不存在 - ID: {conversation_id}")
+            raise HTTPException(status_code=404, detail="对话不存在")
+        
+        if conversation_data.title is not None:
+            conversation.title = conversation_data.title
+        
+        db.commit()
+        db.refresh(conversation)
+        logger.info(f"✅ 更新会话成功 - ID: {conversation_id}")
+        return conversation
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ 更新会话失败: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"更新会话失败: {str(e)}")

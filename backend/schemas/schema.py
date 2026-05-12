@@ -107,3 +107,47 @@ class ToolCallRequest(BaseModel):
     """工具调用请求"""
     tool_name: str = Field(..., description="工具名称")
     tool_args: dict = Field(..., description="工具参数")
+
+
+# RAG相关 Schema
+class RAGProcessRequest(BaseModel):
+    """RAG处理请求"""
+    paths: List[str] = Field(..., description="文件或文件夹路径列表")
+
+
+class RAGUploadedFile(BaseModel):
+    """上传的文件内容"""
+    name: str = Field(..., description="文件名")
+    content: str = Field(..., description="文件内容")
+    size: int = Field(0, description="文件大小")
+
+
+class RAGUploadRequest(BaseModel):
+    """RAG上传请求"""
+    files: List[RAGUploadedFile] = Field(..., description="上传的文件列表")
+
+
+class RAGProcessResponse(BaseModel):
+    """RAG处理响应"""
+    success: bool = Field(..., description="处理是否成功")
+    message: str = Field(..., description="处理结果消息")
+    total_files: int = Field(0, description="处理的文件总数")
+    total_chunks: int = Field(0, description="生成的chunk总数")
+    stored_chunks: int = Field(0, description="成功存储的chunk数")
+    skipped_chunks: int = Field(0, description="跳过的chunk数（重复）")
+    files: List[str] = Field([], description="处理的文件名列表")
+
+
+class RAGFileResponse(BaseModel):
+    """RAG文件响应"""
+    id: int = Field(..., description="文件ID")
+    file_name: str = Field(..., description="文件名")
+    file_path: str = Field(..., description="文件路径")
+    file_size: int = Field(0, description="文件大小")
+    created_at: Optional[str] = Field(None, description="创建时间")
+
+
+class RAGDeleteResponse(BaseModel):
+    """RAG删除响应"""
+    success: bool = Field(..., description="删除是否成功")
+    message: str = Field(..., description="删除结果消息")

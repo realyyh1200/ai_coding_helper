@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 from db.database import engine, Base
-from api import auth, chat, user
+from api import auth, chat, user, rag
 from core.config import settings
 from core.logger import logger
 import time
@@ -59,6 +59,7 @@ async def log_requests(request: Request, call_next):
 app.include_router(auth.router, prefix="/api/auth", tags=["认证"])
 app.include_router(chat.router, prefix="/api/chat", tags=["聊天"])
 app.include_router(user.router, prefix="/api/users", tags=["用户"])
+app.include_router(rag.router, prefix="/api/rag", tags=["RAG"])
 
 
 @app.get("/")

@@ -14,7 +14,7 @@
         {{ isExpanded ? '▼' : '▶' }}
       </span>
     </div>
-    
+
     <!-- 如果是文件夹且已展开，递归显示子文件 -->
     <div v-if="file.isFolder && isExpanded" class="sub-files">
       <FileItem
@@ -31,6 +31,7 @@
 
 <script setup>
 import { computed, ref, onMounted } from 'vue'
+import { setDragFileHandle, clearDragFileHandle } from '../store/dragStore'
 
 const props = defineProps({
   file: {
@@ -53,7 +54,7 @@ const isExpanded = computed(() => {
 
 async function loadSubFiles() {
   if (!props.file.handle) return
-  
+
   try {
     const files = []
     for await (const entry of props.file.handle.values()) {
@@ -72,8 +73,7 @@ async function loadSubFiles() {
       return a.name.localeCompare(b.name)
     })
     subFiles.value = files
-    
-    // 通知父组件，子文件已加载，可以添加到全局列表
+
     emit('loaded', files)
   } catch (error) {
     console.error('Failed to load subfiles:', error)
@@ -84,7 +84,6 @@ function handleClick() {
   if (props.file.isFolder) {
     const wasExpanded = isExpanded.value
     emit('toggle', props.file.path)
-    // 如果现在是展开状态且子文件为空，加载子文件
     const nowExpanded = !wasExpanded
     if (nowExpanded && subFiles.value.length === 0) {
       loadSubFiles()
@@ -94,17 +93,26 @@ function handleClick() {
 
 function handleDragStart(e) {
   if (props.file.isFolder) return
-  
+
   e.dataTransfer.setData('text/plain', props.file.path)
   e.dataTransfer.effectAllowed = 'copy'
+
+  if (props.file.handle) {
+    setDragFileHandle({
+      handle: props.file.handle,
+      name: props.file.name,
+      path: props.file.path
+    })
+  }
+
   emit('dragstart', e)
 }
 
 function handleDragEnd(e) {
+  clearDragFileHandle()
   emit('dragend', e)
 }
 
-// 如果文件夹已展开，初始化时加载子文件
 onMounted(() => {
   if (isExpanded.value && props.file.isFolder) {
     loadSubFiles()
@@ -139,12 +147,12 @@ onMounted(() => {
 }
 
 .expand-icon {
-  font-size: 10px;  /* 略小于文件名的13px */
+  font-size: 10px;
   color: #95a5a6;
   margin-left: 4px;
 }
 
 .sub-files {
-  padding-left: 16px;  /* 子文件夹缩进 */
+  padding-left: 16px;
 }
 </style>

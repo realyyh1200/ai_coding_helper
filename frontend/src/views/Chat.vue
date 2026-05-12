@@ -108,6 +108,11 @@
         </button>
       </div>
     </main>
+
+    <!-- RAG面板 -->
+    <aside class="rag-sidebar">
+      <RAGPanel />
+    </aside>
   </div>
 </template>
 
@@ -116,6 +121,7 @@ import { ref, onMounted, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { useAuthStore } from '../store/auth'
 import FileItem from '../components/FileItem.vue'
+import RAGPanel from '../components/RAGPanel.vue'
 import {
   fetchConversations,
   createConversation,
@@ -987,5 +993,12 @@ async function onDrop(e) {
 .input-container.drag-over {
   border: 3px dashed #3498db;
   background: rgba(52, 152, 219, 0.1);
+}
+
+/* RAG侧边栏 */
+.rag-sidebar {
+  width: 320px;
+  background: #34495e;
+  border-left: 1px solid #2c3e50;
 }
 </style>

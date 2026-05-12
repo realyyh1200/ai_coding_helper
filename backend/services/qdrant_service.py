@@ -220,22 +220,126 @@ class QdrantService:
             logger.error(f"Failed to delete user vectors: {e}")
             return False
 
-    def count_vectors(self, user_id: int) -> int:
+    @retry_with_backoff(max_retries=3, delay=1)
+    def store_vectors(
+        self,
+        vectors: List[List[float]],
+        payloads: List[Dict[str, Any]]
+    ) -> int:
+        """批量存储向量"""
         if self._client is None:
-            return 0
+            logger.warning("Qdrant not connected, attempting reconnect...")
+            if not self._reconnect():
+                logger.warning("Failed to reconnect to Qdrant, skipping store")
+                return 0
         try:
-            result = self._client.count(
+            points = []
+            for i, (vector, payload) in enumerate(zip(vectors, payloads)):
+                point_id = int(uuid.uuid4().hex[:15], 16)
+                points.append(PointStruct(
+                    id=point_id,
+                    vector=vector,
+                    payload=payload
+                ))
+            
+            self._client.upsert(
                 collection_name=settings.QDRANT_COLLECTION,
-                count_filter=Filter(
+                points=points
+            )
+            logger.info(f"Stored {len(points)} vectors")
+            return len(points)
+        except Exception as e:
+            logger.error(f"Failed to store vectors: {e}")
+            try:
+                self._reconnect()
+            except Exception:
+                pass
+            return 0
+
+    @retry_with_backoff(max_retries=3, delay=1)
+    def search_vectors_for_rag(
+        self,
+        query_vector: List[float],
+        user_id: int,
+        limit: int = 10,
+        score_threshold: float = 0.0
+    ) -> List[Dict[str, Any]]:
+        """为RAG搜索向量"""
+        if self._client is None:
+            logger.warning("Qdrant not connected, attempting reconnect...")
+            if not self._reconnect():
+                logger.warning("Failed to reconnect to Qdrant, returning empty results")
+                return []
+        try:
+            if hasattr(self._client, 'search'):
+                results = self._client.search(
+                    collection_name=settings.QDRANT_COLLECTION,
+                    query_vector=query_vector,
+                    query_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="user_id",
+                                match=MatchValue(value=user_id)
+                            )
+                        ]
+                    ),
+                    limit=limit,
+                    score_threshold=score_threshold
+                )
+            else:
+                results = self._client.query_points(
+                    collection_name=settings.QDRANT_COLLECTION,
+                    query=query_vector,
+                    query_filter=Filter(
+                        must=[
+                            FieldCondition(
+                                key="user_id",
+                                match=MatchValue(value=user_id)
+                            )
+                        ]
+                    ),
+                    limit=limit,
+                    score_threshold=score_threshold
+                ).points
+            
+            return [
+                {
+                    "id": r.id,
+                    "score": r.score,
+                    "content": r.payload.get("content", ""),
+                    "file_name": r.payload.get("file_name", ""),
+                    "file_path": r.payload.get("file_path", ""),
+                    "chunk_index": r.payload.get("chunk_index", 0)
+                }
+                for r in results
+            ]
+        except Exception as e:
+            logger.error(f"Failed to search vectors for RAG: {e}")
+            try:
+                self._reconnect()
+            except Exception:
+                pass
+            return []
+
+    def delete_vectors_by_file(self, file_path: str, user_id: int) -> bool:
+        """根据文件路径删除向量"""
+        if self._client is None:
+            return False
+        try:
+            self._client.delete(
+                collection_name=settings.QDRANT_COLLECTION,
+                points_selector=Filter(
                     must=[
+                        FieldCondition(key="file_path", match=MatchValue(value=file_path)),
                         FieldCondition(key="user_id", match=MatchValue(value=user_id))
                     ]
                 )
             )
-            return result.count
+            logger.info(f"Deleted vectors for file_path={file_path}")
+            return True
         except Exception as e:
-            logger.error(f"Failed to count vectors: {e}")
-            return 0
+            logger.error(f"Failed to delete vectors by file: {e}")
+            return False
 
 
 qdrant_service = QdrantService()
