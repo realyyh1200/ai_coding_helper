@@ -144,6 +144,7 @@ class RAGFileResponse(BaseModel):
     file_name: str = Field(..., description="文件名")
     file_path: str = Field(..., description="文件路径")
     file_size: int = Field(0, description="文件大小")
+    chunk_count: int = Field(0, description="Chunk数量")
     created_at: Optional[str] = Field(None, description="创建时间")
 
 

@@ -24,3 +24,4 @@ Thumbs.db
 
 # Models
 bge_model/
+cross_encoder_model/

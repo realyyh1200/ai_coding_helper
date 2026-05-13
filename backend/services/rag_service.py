@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from models.rag import RAGFile, RAGChunk
 from services.bge_service import BGEEmbeddingService as BgeService
 from services.qdrant_service import QdrantService
+from services.cross_encoder_service import CrossEncoderService
 from core.logger import logger
 
 # 排除的文件扩展名（二进制、视频、音频等）
@@ -43,6 +44,7 @@ class RAGService:
         self.user_id = user_id
         self.bge_service = BgeService()
         self.qdrant_service = QdrantService()
+        self.cross_encoder = CrossEncoderService()
         self.chunk_size = 512
         self.chunk_overlap = 64
 
@@ -346,7 +348,7 @@ class RAGService:
         return score
 
     def retrieve(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
-        """使用BM25+余弦相似度召回，加入MMR增加多样性"""
+        """使用BM25+余弦相似度召回，加入cross-encoder精排"""
         logger.info(f"🔍 RAG召回开始，查询: {query[:50]}...")
 
         query_embedding = self.bge_service.encode([query])[0]
@@ -356,16 +358,27 @@ class RAGService:
             limit=top_k * 3
         )
 
+        logger.info(f"📥 Qdrant向量检索返回 {len(qdrant_results)} 条结果")
+
         if not qdrant_results:
             logger.info("⚠️ Qdrant未找到匹配结果")
             return []
 
         hybrid_results = []
-        for result in qdrant_results:
+        all_cosine = [result.get('score', 0) for result in qdrant_results]
+        all_bm25 = [self._bm25_score(query, result['content']) for result in qdrant_results]
+        
+        cos_min, cos_max = min(all_cosine), max(all_cosine)
+        bm25_min, bm25_max = min(all_bm25), max(all_bm25)
+        
+        for i, result in enumerate(qdrant_results):
             cosine_score = result.get('score', 0)
-            bm25_score = self._bm25_score(query, result['content'])
-
-            hybrid_score = 0.6 * cosine_score + 0.4 * bm25_score
+            bm25_score = all_bm25[i]
+            
+            norm_cosine = (cosine_score - cos_min) / (cos_max - cos_min + 1e-8)
+            norm_bm25 = (bm25_score - bm25_min) / (bm25_max - bm25_min + 1e-8)
+            
+            hybrid_score = 0.6 * norm_cosine + 0.4 * norm_bm25
 
             hybrid_results.append({
                 'content': result['content'],
@@ -379,19 +392,52 @@ class RAGService:
 
         hybrid_results.sort(key=lambda x: x['hybrid_score'], reverse=True)
 
-        seen_files = set()
+        logger.info(f"📊 粗排(BM25+余弦)完成，取前20条进入精排")
+        for i, result in enumerate(hybrid_results[:5], 1):
+            logger.info(f"   粗排[{i}] {result['file_name']} (cosine={result['cosine_score']:.4f}, bm25={result['bm25_score']:.4f}, hybrid={result['hybrid_score']:.4f})")
+
+        # Cross-encoder精排：取前20条进行精排
+        top_candidates = hybrid_results[:20]
+        if top_candidates:
+            contents = [r['content'] for r in top_candidates]
+            ce_scores = self.cross_encoder.score(query, contents)
+            
+            logger.info(f"🔄 Cross-encoder精排开始，处理 {len(top_candidates)} 条候选")
+            logger.info(f"   CE分数范围: [{min(ce_scores):.4f}, {max(ce_scores):.4f}]")
+            
+            for i, result in enumerate(top_candidates):
+                result['ce_score'] = ce_scores[i]
+                result['final_score'] = 0.5 * result['hybrid_score'] + 0.5 * ce_scores[i]
+            
+            top_candidates.sort(key=lambda x: x['final_score'], reverse=True)
+            logger.info(f"✅ Cross-encoder精排完成")
+            
+            logger.info(f"🔍 精排前后对比:")
+            for i, result in enumerate(top_candidates[:5], 1):
+                logger.info(f"   精排[{i}] {result['file_name']} (hybrid={result['hybrid_score']:.4f}, ce={result['ce_score']:.4f}, final={result['final_score']:.4f})")
+        else:
+            for result in hybrid_results:
+                result['ce_score'] = 0.0
+                result['final_score'] = result['hybrid_score']
+
+        file_chunk_count = {}
         final_results = []
-        for result in hybrid_results:
+        max_chunks_per_file = 3
+
+        for result in top_candidates:
             if len(final_results) >= top_k:
                 break
+
             file_key = result['file_name']
-            if file_key not in seen_files:
-                seen_files.add(file_key)
+            current_count = file_chunk_count.get(file_key, 0)
+
+            if current_count < max_chunks_per_file:
+                file_chunk_count[file_key] = current_count + 1
                 final_results.append(result)
 
-        logger.info(f"✅ RAG召回完成，找到 {len(final_results)} 条相关结果（来自 {len(seen_files)} 个不同文件）:")
+        logger.info(f"✅ RAG召回完成，找到 {len(final_results)} 条相关结果（来自 {len(file_chunk_count)} 个文件）:")
         for i, result in enumerate(final_results, 1):
-            logger.info(f"   [{i}] {result['file_name']} (cosine={result['cosine_score']:.4f}, bm25={result['bm25_score']:.4f}, hybrid={result['hybrid_score']:.4f})")
+            logger.info(f"   [{i}] {result['file_name']} (chunk_{result['chunk_index']}) (cosine={result['cosine_score']:.4f}, bm25={result['bm25_score']:.4f}, ce={result.get('ce_score', 0):.4f}, final={result.get('final_score', result['hybrid_score']):.4f})")
             logger.info(f"       内容预览: {result['content'][:100]}...")
 
         return final_results
