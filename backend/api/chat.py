@@ -9,10 +9,12 @@ from core.security import get_current_active_user
 from services.anthropic_service import AnthropicService
 from services.memory_service import MemoryService
 from services.rag_service import RAGService
+from services.chit_chat_detector import ChitChatDetector
 from core.logger import logger
 import json
 
 router = APIRouter()
+chit_chat_detector = ChitChatDetector()
 
 
 @router.post("/stream")
@@ -29,7 +31,11 @@ async def chat_stream(
             raise HTTPException(status_code=400, detail="消息不能为空")
 
         memory_service = MemoryService(db, current_user.id, chat_data.conversation_id)
-        rag_service = RAGService(db, current_user.id)
+        
+        is_chit_chat = chit_chat_detector.is_chit_chat(chat_data.message)
+        
+        if not is_chit_chat:
+            rag_service = RAGService(db, current_user.id)
 
         conversation = None
         if chat_data.conversation_id:
@@ -69,41 +75,46 @@ async def chat_stream(
 
         memory_context = memory_service.get_context_for_ai(include_recent=5)
 
-        # RAG召回
-        rag_results = rag_service.retrieve(chat_data.message, top_k=5)
-        logger.info(f"🔍 RAG召回结果: {len(rag_results)} 条")
-
-        # 构建RAG上下文
-        rag_context = ""
+        rag_results = []
         referenced_files = set()
-        if rag_results:
-            rag_context = "【参考文档】\n"
-            for i, result in enumerate(rag_results, 1):
-                rag_context += f"文档{i} ({result['file_name']}):\n{result['content']}\n\n"
-                referenced_files.add(result['file_name'])
+        
+        if not is_chit_chat:
+            rag_results = rag_service.retrieve(chat_data.message, top_k=5)
+            logger.info(f"🔍 RAG召回结果: {len(rag_results)} 条")
+            
+            if rag_results:
+                for result in rag_results:
+                    referenced_files.add(result['file_name'])
 
         async def stream_response() -> AsyncGenerator[str, None]:
             anthropic_service = AnthropicService()
 
             full_response = ""
             try:
-                logger.info(f"🤖 开始AI响应生成 - 会话ID: {conversation.id}")
+                logger.info(f"🤖 开始AI响应生成 - 会话ID: {conversation.id}, 闲聊模式: {is_chit_chat}")
 
-                # 构建增强的系统提示
                 enhanced_system_prompt = chat_data.system_prompt + "\n\n" + memory_context
                 
-                if rag_results:
-                    enhanced_system_prompt += "\n\n请基于提供的参考文档内容进行回答，回答结束后请列出参考文献名称。"
+                current_message = chat_data.message
+                if not is_chit_chat and rag_results:
+                    rag_context = "\n\n【参考文档】\n"
+                    for i, result in enumerate(rag_results, 1):
+                        rag_context += f"\n文档{i}：{result['file_name']}\n"
+                        rag_context += f"内容：{result['content']}\n"
+                    rag_context += "\n\n请基于以上参考文档内容，准确回答我的问题。"
+                    current_message = rag_context + "\n\n【用户问题】\n" + chat_data.message
+                    logger.info(f"📄 已将 {len(rag_results)} 条文档内容作为上下文传递")
+
+                request_messages = messages_history + [{"role": "user", "content": current_message}]
 
                 async for chunk in anthropic_service.stream_chat(
-                    messages=messages_history,
+                    messages=request_messages,
                     system_prompt=enhanced_system_prompt
                 ):
                     full_response += chunk
                     yield f"data: {json.dumps({'content': chunk, 'done': False})}\n\n"
 
-                # 如果有RAG结果，添加参考文献列表
-                if rag_results and referenced_files:
+                if not is_chit_chat and rag_results and referenced_files:
                     references = "\n\n【参考文献】\n" + "\n".join([f"- {f}" for f in referenced_files])
                     full_response += references
                     yield f"data: {json.dumps({'content': references, 'done': False})}\n\n"
